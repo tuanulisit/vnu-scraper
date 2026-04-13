@@ -11,13 +11,15 @@ const BASE_URL  = "https://daotao.vnu.edu.vn/dkmh";
 const LOGIN_URL = `${BASE_URL}/login.asp`;
 const PAGE_URL  = `${BASE_URL}/default.asp`;
 
-const MODULES = {
-  ket_qua_hoc_tap:   "386",
-  khung_ctdt:        "413",
-  huong_dan:         "376",
-  lich_thi:          "379",
-  ho_so_sinh_vien:   "373",
-  dang_ky_chuyen_de: "412",
+// URL thật của từng module (từ app_path trong HTML)
+const APP_PATHS = {
+  ket_qua_hoc_tap:   "ListPoint/listpoint_Brc1.asp",
+  khung_ctdt:        "ViewProgram/ViewPrg_Brc1.asp",
+  huong_dan:         "Help/default.asp",
+  lich_thi:          "StdExamination/StdExamination.asp",
+  ho_so_sinh_vien:   "StdInfo/StdInfo.asp",
+  dang_ky_chuyen_de: "QuanlyChuyende/SVDK_Chuyende.asp",
+  tkb:               "Register/RegisterPrint.asp",
 };
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
@@ -50,6 +52,11 @@ function createClient() {
 async function login(username, password) {
   const { client, jar } = createClient();
 
+  // Bước 0: Logout trước để reset session (VNU yêu cầu)
+  await client.get(`${LOGIN_URL}?Logout=logout`, {
+    headers: { "sec-fetch-user": "?1" },
+  });
+
   // GET trang login — cookie jar tự lưu ASPSESSIONID
   const getRes = await client.get(LOGIN_URL, {
     headers: { "sec-fetch-user": "?1", "cache-control": "max-age=0" },
@@ -60,7 +67,7 @@ async function login(username, password) {
   const passField = $('input[type="password"]').first().attr("name") || "txtPassword";
 
   const body = new URLSearchParams({
-    chkSubmit:   "",
+    chkSubmit:   "ok",
     [userField]: username,
     [passField]: password,
   });
@@ -77,13 +84,14 @@ async function login(username, password) {
     },
   });
 
+  // Debug log
+  console.log("=== LOGIN DEBUG ===");
+  console.log("POST status:", postRes.status);
+  console.log("POST cookies:", postRes.headers["set-cookie"]);
+  console.log("Body 500 chars:", postRes.data.substring(0, 500));
+  console.log("==================");
+
   // Kiểm tra đăng nhập thất bại
-console.log("POST status:", postRes.status);
-console.log("POST cookies:", postRes.headers["set-cookie"]);
-console.log("Body 300 chars:", postRes.data.substring(0, 300));
-const doc = cheerio.load(postRes.data);
-if (doc('input[type="password"]').length > 0) {
-  
   const doc = cheerio.load(postRes.data);
   if (doc('input[type="password"]').length > 0) {
     throw new Error("Sai tên đăng nhập hoặc mật khẩu");
@@ -92,21 +100,18 @@ if (doc('input[type="password"]').length > 0) {
   return { client, jar };
 }
 
-// ── Load module qua cookie first=PortalModule_XXX ─────────────────────────────
-async function fetchModule(moduleId, client, extraForm = {}) {
-  // Set cookie first trước khi request
-  await client.defaults.jar.setCookie(
-    `first=PortalModule_${moduleId}`,
-    "https://daotao.vnu.edu.vn"
-  );
+// ── Fetch module: GET trực tiếp URL thật trong iframe ─────────────────────────
+async function fetchModule(appPath, client, params = {}) {
+  // URL dạng: https://daotao.vnu.edu.vn/dkmh/../../ListPoint/listpoint.asp
+  // Thực tế resolve thành: https://daotao.vnu.edu.vn/ListPoint/listpoint.asp
+  const url = `https://daotao.vnu.edu.vn/${appPath}`;
 
-  const body = new URLSearchParams(extraForm);
+  const queryString = Object.keys(params).length
+    ? "?" + new URLSearchParams(params).toString()
+    : "";
 
-  const res = await client.post(PAGE_URL, body.toString(), {
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Referer":      PAGE_URL,
-    },
+  const res = await client.get(url + queryString, {
+    headers: { "Referer": PAGE_URL },
   });
 
   return res.data;
@@ -117,15 +122,20 @@ function parseTable(html, colMap) {
   const $ = cheerio.load(html);
   const rows = [];
 
-  $("table tr").each((i, tr) => {
-    const isHeader = $(tr).find("th").length > 0;
-    if (isHeader) return;
+  // Dữ liệu điểm nằm trong divList3, bỏ qua các div khác
+  const container = $("#divList3").length ? $("#divList3") : $("body");
 
+  container.find("tr").each((_, tr) => {
     const cols = $(tr).find("td")
-      .map((_, td) => $(td).text().replace(/\s+/g, " ").trim())
+      .map((_, td) => $(td).text().replace(/[\s ]+/g, " ").trim())
       .get();
 
-    if (cols.length < 2) return;
+    // Bỏ dòng header (STT, Mã MH...) và dòng tiêu đề học kỳ (colspan)
+    const hasColspan = $(tr).find("td[colspan]").length > 0;
+    if (hasColspan) return;
+    if (cols.length < 4) return;
+    // Bỏ dòng có STT không phải số
+    if (!/^\d+$/.test(cols[0])) return;
 
     const obj = {};
     colMap.forEach((key, idx) => { if (key) obj[key] = cols[idx] || ""; });
@@ -137,7 +147,7 @@ function parseTable(html, colMap) {
 
 // ── Fetchers ───────────────────────────────────────────────────────────────────
 async function getKetQuaHocTap(client, hocKy) {
-  const html = await fetchModule(MODULES.ket_qua_hoc_tap, client,
+  const html = await fetchModule(APP_PATHS.ket_qua_hoc_tap, client,
     hocKy ? { cboTerm: hocKy } : {}
   );
   const rows = parseTable(html, ["stt","maMon","tenMon","soTinChi","diemHe10","diemChu","diemHe4"]);
@@ -151,43 +161,122 @@ async function getKetQuaHocTap(client, hocKy) {
 }
 
 async function getKhungCTDT(client) {
-  const html = await fetchModule(MODULES.khung_ctdt, client);
+  const html = await fetchModule(APP_PATHS.khung_ctdt, client);
   const $ = cheerio.load(html);
   const blocks = [];
   let cur = null;
-  $("table tr").each((_, tr) => {
-    const cols = $(tr).find("td").map((_, td) => $(td).text().replace(/\s+/g, " ").trim()).get();
+
+  // Lấy thông tin tổng quan từ divList1
+  const tongQuan = {};
+  $("#divList1 td").each((_, td) => {
+    const txt = $(td).text().replace(/\s+/g, " ").trim();
+    if (/Chương trình đào tạo:/i.test(txt)) tongQuan.ctdt = txt.replace(/Chương trình đào tạo:/i, "").trim();
+    if (/Tổng số tín chỉ/i.test(txt)) tongQuan.tongTC = txt.replace(/Tổng số tín chỉ tích lũy:/i, "").trim();
+    if (/Điểm TBCTL/i.test(txt)) tongQuan.diemTBCTL = txt.replace(/Điểm TBCTL:/i, "").trim();
+  });
+
+  // Parse bảng trong divList3: STT|MãMH|TênMôn|SốTC|Loại|TínhĐiểm|Điểm
+  $("#divList3 tr").each((_, tr) => {
+    const tds = $(tr).find("td");
+    const cols = tds.map((_, td) => $(td).text().replace(/[\s\u00a0]+/g, " ").trim()).get();
     if (!cols.length) return;
-    if ($(tr).find('td[colspan]').length > 0 && cols.length <= 2 && cols[0].length > 10) {
-      cur = { tenKhoi: cols[0], monHoc: [] };
-      blocks.push(cur);
+
+    // Dòng tiêu đề khối: có td với colspan >= 2, text như "I Khối..."
+    const firstTd = tds.first();
+    const colspan = parseInt(firstTd.attr("colspan") || "1");
+    if (colspan >= 2) {
+      // Row đầu của khối: "I Khối kiến thức chung"
+      // Row thứ 2: "Số TC bắt buộc: X / Y" — gắn vào cur
+      // Mỗi row colspan thường có 2-3 td: tên khối | số TC bắt buộc | số TC lựa chọn
+      const tdTexts = $(tr).find("td").map((_, td) => $(td).text().replace(/[\s\u00a0]+/g, " ").trim()).get().filter(Boolean);
+      const tenKhoiText = tdTexts[0] || "";
+      const batBuocText = tdTexts.find(t => /Số TC bắt buộc/i.test(t)) || "";
+      const tuChonText  = tdTexts.find(t => /Số TC lựa chọn/i.test(t)) || "";
+
+      if (/^(I|II|III|IV|V|VI|VII|VIII|IX|X)\s/i.test(tenKhoiText) || /khối/i.test(tenKhoiText)) {
+        cur = {
+          tenKhoi: tenKhoiText,
+          soTCBatBuoc: batBuocText,
+          soTCTuChon: tuChonText,
+          monHoc: []
+        };
+        blocks.push(cur);
+      } else if (cur && batBuocText) {
+        cur.soTCBatBuoc = batBuocText;
+        if (tuChonText) cur.soTCTuChon = tuChonText;
+      }
       return;
     }
-    if (cur && cols.length >= 3) {
-      cur.monHoc.push({ maMon: cols[0], tenMon: cols[1], tinChi: cols[2], loai: cols[3]||"", diem: cols[4]||"" });
+
+    // Dòng môn học: cols[0] là số thứ tự
+    if (cur && cols.length >= 4 && /^\d+$/.test(cols[0].trim())) {
+      cur.monHoc.push({
+        stt:    cols[0],
+        maMon:  cols[1],
+        tenMon: cols[2],
+        soTC:   cols[3],
+        loai:   cols[4] ? cols[4].trim() : "Tự chọn",
+        diem:   cols[6] || "",
+      });
     }
   });
-  return blocks;
+
+  // Parse bảng chứng chỉ (divList2 thứ 2)
+  const chungChi = [];
+  $("table").each((_, tbl) => {
+    const header = $(tbl).find("td[colspan]").first().text().trim();
+    if (/Xem chứng chỉ/i.test(header)) {
+      $(tbl).next("table").find("tr").each((_, tr) => {
+        const cols = $(tr).find("td").map((_, td) => $(td).text().replace(/\s+/g, " ").trim()).get().filter(Boolean);
+        if (cols.length >= 3 && !/Trạng thái/i.test(cols[0])) {
+          chungChi.push({
+            trangThai: cols[0],
+            maCT:      cols[1].trim(),
+            tenCT:     cols[2],
+            moTa:      cols[3] || "",
+            soQD:      cols[4] || "",
+            ngayQD:    cols[5] || "",
+          });
+        }
+      });
+    }
+  });
+
+  return { tongQuan, khoiKienThuc: blocks, chungChi };
 }
 
 async function getLichThi(client) {
-  const html = await fetchModule(MODULES.lich_thi, client);
+  const html = await fetchModule(APP_PATHS.lich_thi, client);
   return parseTable(html, ["stt","maMon","tenMon","ngayThi","ca","phong","hinhThuc"]);
 }
 
 async function getHoSoSinhVien(client) {
-  const html = await fetchModule(MODULES.ho_so_sinh_vien, client);
+  const html = await fetchModule("StdInfo/TabStdInfo.asp", client);
   const $ = cheerio.load(html);
   const info = {};
+
+  // Các field cần bỏ qua
+  const skipKeys = ["STT", "Tên hồ sơ", "url"];
+  const skipPattern = /^\d+$/;
+
   $("table tr").each((_, tr) => {
-    const cols = $(tr).find("td,th").map((_, td) => $(td).text().replace(/\s+/g, " ").trim()).get();
-    if (cols.length >= 2 && cols[0]) info[cols[0]] = cols[1];
+    const tds = $(tr).find("td");
+    // Xử lý từng cặp td liên tiếp (layout 2 cột: label | value)
+    for (let i = 0; i < tds.length - 1; i += 2) {
+      const key = $(tds[i]).text().replace(/[\s\u00a0]+/g, " ").trim();
+      const val = $(tds[i+1]).text().replace(/[\s\u00a0]+/g, " ").trim();
+      if (!key || skipKeys.includes(key) || skipPattern.test(key)) continue;
+      if (key.length < 60 && key.includes(":")) {
+        info[key.replace(/:$/, "")] = val;
+      }
+    }
   });
+
   return info;
 }
 
 async function getDangKyChuyenDe(client) {
-  const html = await fetchModule(MODULES.dang_ky_chuyen_de, client);
+  const html = await fetchModule(APP_PATHS.dang_ky_chuyen_de, client);
   const $ = cheerio.load(html);
   const ds = [];
   $("table tr").each((_, tr) => {
@@ -206,16 +295,48 @@ async function getDangKyChuyenDe(client) {
 }
 
 async function getHuongDan(client) {
-  const html = await fetchModule(MODULES.huong_dan, client);
+  const html = await fetchModule(APP_PATHS.huong_dan, client);
   const $ = cheerio.load(html);
   const tb = [];
-  $("a, li, p").each((_, el) => {
-    const text = $(el).text().replace(/\s+/g, " ").trim();
+  const seen = new Set();
+
+  // Ưu tiên lấy các thẻ <a> có href (bỏ trùng)
+  $("a[href]").each((_, el) => {
+    const text = $(el).text().replace(/[\s\u00a0]+/g, " ").trim();
     const href = $(el).attr("href") || "";
-    if (text.length > 10) tb.push({ noidung: text, link: href });
+    if (text.length > 10 && !seen.has(text)) {
+      seen.add(text);
+      tb.push({ noidung: text, link: href });
+    }
   });
-  return tb.slice(0, 20);
+
+  // Lấy thêm các thông báo dạng <li>, <p> không có link
+  $("li, p").each((_, el) => {
+    const text = $(el).text().replace(/[\s\u00a0]+/g, " ").trim();
+    if (text.length > 20 && !seen.has(text)) {
+      seen.add(text);
+      tb.push({ noidung: text, link: "" });
+    }
+  });
+
+  return tb.slice(0, 25);
 }
+
+// ── Debug dump HTML trang điểm ────────────────────────────────────────────────
+app.post("/debug-html", async (req, res) => {
+  const { username, password, intent = "ket_qua_hoc_tap" } = req.body;
+  if (!username || !password) return res.status(400).json({ error: "Thiếu thông tin" });
+  let client;
+  try {
+    ({ client } = await login(username, password));
+  } catch (err) {
+    return res.status(401).json({ error: err.message });
+  }
+  const moduleId = APP_PATHS[intent] || APP_PATHS.ket_qua_hoc_tap;
+  const html = await fetchModule(moduleId, client);
+  // Trả về 3000 ký tự đầu của HTML
+  return res.json({ html: html });
+});
 
 // ── Endpoint chính ─────────────────────────────────────────────────────────────
 app.post("/query", async (req, res) => {
