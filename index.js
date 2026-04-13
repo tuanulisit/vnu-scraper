@@ -304,9 +304,76 @@ app.post("/query", async (req, res) => {
   }
 });
 
+// ── Debug endpoint: xem chi tiết login response ───────────────────────────────
+app.post("/debug-login", async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: "Thiếu username/password" });
+
+  try {
+    // GET trang login
+    const getRes = await axios.get(LOGIN_URL, { headers: { "User-Agent": UA } });
+    const initCookies = (getRes.headers["set-cookie"] || []).map((c) => c.split(";")[0]).join("; ");
+
+    const $ = cheerio.load(getRes.data);
+
+    // Thu thập tất cả input fields
+    const allFields = {};
+    $("input").each((_, el) => {
+      const name = $(el).attr("name");
+      const type = $(el).attr("type");
+      const val  = $(el).attr("value") || "";
+      if (name) allFields[name] = { type, val };
+    });
+
+    // POST
+    const userField = $('input[type="text"]').first().attr("name") || "txtLoginId";
+    const passField = $('input[type="password"]').first().attr("name") || "txtPassword";
+    const hidden = {};
+    $('input[type="hidden"]').each((_, el) => {
+      const n = $(el).attr("name");
+      if (n) hidden[n] = $(el).attr("value") || "";
+    });
+
+    const body = new URLSearchParams({
+      ...hidden,
+      [userField]: username,
+      [passField]: password,
+    });
+
+    const postRes = await axios.post(LOGIN_URL, body.toString(), {
+      headers: {
+        "User-Agent":   UA,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer":      LOGIN_URL,
+        "Cookie":       initCookies,
+      },
+      maxRedirects: 5,
+      validateStatus: (s) => s < 500,
+    });
+
+    const doc = cheerio.load(postRes.data);
+    const hasPasswordField = doc('input[type="password"]').length > 0;
+    const bodySnippet = postRes.data.substring(0, 500);
+
+    return res.json({
+      allInputFields: allFields,
+      userFieldDetected: userField,
+      passFieldDetected: passField,
+      hiddenFields: Object.keys(hidden),
+      initCookies,
+      postStatus: postRes.status,
+      postCookies: postRes.headers["set-cookie"] || [],
+      hasPasswordField,
+      bodySnippet,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health check ───────────────────────────────────────────────────────────────
 app.get("/", (_, res) =>
-  res.json({ status: "ok", service: "VNU Daotao Scraper", version: "3.0" })
+  res.json({ status: "ok", service: "VNU Daotao Scraper", version: "3.1" })
 );
 
 const PORT = process.env.PORT || 3000;
