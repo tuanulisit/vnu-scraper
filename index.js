@@ -41,9 +41,9 @@ async function login(username, password) {
     if (n) hidden[n] = $(el).attr("value") || "";
   });
 
-  // Tự detect tên field user/pass
-  const userField = $('input[type="text"]').first().attr("name")     || "txtUser";
-  const passField = $('input[type="password"]').first().attr("name") || "txtPass";
+  // Tên field thực tế từ HTML daotao.vnu.edu.vn
+  const userField = $('input[type="text"]').first().attr("name")     || "txtLoginId";
+  const passField = $('input[type="password"]').first().attr("name") || "txtPassword";
   const btnField  = $('input[type="submit"]').first().attr("name");
 
   const body = new URLSearchParams({
