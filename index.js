@@ -47,18 +47,20 @@ async function login(username, password) {
   const btnField  = $('input[type="submit"]').first().attr("name");
 
   const body = new URLSearchParams({
-    ...hidden,
+    chkSubmit: "",
     [userField]: username,
     [passField]: password,
-    ...(btnField ? { [btnField]: "Đăng nhập" } : {}),
   });
 
   const postRes = await axios.post(LOGIN_URL, body.toString(), {
     headers: {
-      "User-Agent":   UA,
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Referer":      LOGIN_URL,
-      "Cookie":       initCookies,
+      "User-Agent":      UA,
+      "Content-Type":    "application/x-www-form-urlencoded",
+      "Referer":         LOGIN_URL,
+      "Cookie":          initCookies,
+      "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8",
+      "Origin":          "https://daotao.vnu.edu.vn",
     },
     maxRedirects: 5,
     validateStatus: (s) => s < 500,
