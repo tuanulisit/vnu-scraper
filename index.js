@@ -78,6 +78,12 @@ async function login(username, password) {
   });
 
   // Kiểm tra đăng nhập thất bại
+console.log("POST status:", postRes.status);
+console.log("POST cookies:", postRes.headers["set-cookie"]);
+console.log("Body 300 chars:", postRes.data.substring(0, 300));
+const doc = cheerio.load(postRes.data);
+if (doc('input[type="password"]').length > 0) {
+  
   const doc = cheerio.load(postRes.data);
   if (doc('input[type="password"]').length > 0) {
     throw new Error("Sai tên đăng nhập hoặc mật khẩu");
